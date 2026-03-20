@@ -7,6 +7,7 @@ then sends a bilingual email digest via Resend.
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import feedparser
@@ -136,21 +137,41 @@ def curate_news(stories: list[dict]) -> dict:
 
     user_msg = f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.\n\nRaw stories:\n{story_text}"
 
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
-        headers={"Content-Type": "application/json"},
-        json={
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [{"parts": [{"text": user_msg}]}],
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 3000,
-                "responseMimeType": "application/json",
-            },
-        },
-        timeout=60,
-    )
-    response.raise_for_status()
+    models = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
+    last_err = None
+
+    for model in models:
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                        "contents": [{"parts": [{"text": user_msg}]}],
+                        "generationConfig": {
+                            "temperature": 0.3,
+                            "maxOutputTokens": 3000,
+                            "responseMimeType": "application/json",
+                        },
+                    },
+                    timeout=60,
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                last_err = e
+                print(f"[WARN] {model} attempt {attempt+1} failed: {e}")
+                if response.status_code == 429:
+                    time.sleep(10 * (attempt + 1))
+                else:
+                    break
+        else:
+            print(f"[WARN] All retries failed for {model}, trying next model...")
+            continue
+        break
+    else:
+        raise RuntimeError(f"All Gemini models failed. Last error: {last_err}")
 
     raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     # Handle potential markdown code fences
