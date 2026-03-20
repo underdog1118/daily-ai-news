@@ -23,5 +23,5 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
         run: python daily_news.py

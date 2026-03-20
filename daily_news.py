@@ -17,7 +17,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
+RECIPIENT_EMAILS = [e.strip() for e in os.environ["RECIPIENT_EMAILS"].split(",")]
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "AI News Digest <news@resend.dev>")
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
@@ -290,7 +290,7 @@ def send_email(subject: str, html: str):
     resp = resend.Emails.send(
         {
             "from": SENDER_EMAIL,
-            "to": [RECIPIENT_EMAIL],
+            "to": RECIPIENT_EMAILS,
             "subject": subject,
             "html": html,
         }
