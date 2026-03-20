@@ -7,9 +7,12 @@ and summarize, then sends a bilingual email digest via Resend.
 import json
 import os
 import re
+import smtplib
 import sys
 import time
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import feedparser
 import requests
@@ -18,9 +21,9 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 RECIPIENT_EMAILS = [e.strip() for e in os.environ["RECIPIENT_EMAILS"].split(",")]
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "AI News Digest <news@resend.dev>")
+GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
+GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 FREE_MODELS = [
@@ -283,19 +286,17 @@ def render_email(digest: dict) -> str:
 # Send email
 # ---------------------------------------------------------------------------
 def send_email(subject: str, html: str):
-    """Send email via Resend API."""
-    import resend
+    """Send email via Gmail SMTP."""
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"AI News Digest <{GMAIL_ADDRESS}>"
+    msg["To"] = ", ".join(RECIPIENT_EMAILS)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html, "html"))
 
-    resend.api_key = RESEND_API_KEY
-    resp = resend.Emails.send(
-        {
-            "from": SENDER_EMAIL,
-            "to": RECIPIENT_EMAILS,
-            "subject": subject,
-            "html": html,
-        }
-    )
-    print(f"[INFO] Email sent: {resp}")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_ADDRESS, RECIPIENT_EMAILS, msg.as_string())
+    print(f"[INFO] Email sent to {RECIPIENT_EMAILS}")
 
 
 # ---------------------------------------------------------------------------
