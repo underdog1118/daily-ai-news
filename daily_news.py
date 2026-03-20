@@ -1,11 +1,12 @@
 """
 Daily AI & Tech News Digest — Bilingual (中文 + English)
-Fetches top stories from multiple sources, uses Gemini to curate and summarize,
-then sends a bilingual email digest via Resend.
+Fetches top stories from multiple sources, uses OpenRouter (free models) to curate
+and summarize, then sends a bilingual email digest via Resend.
 """
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -18,8 +19,16 @@ import requests
 # ---------------------------------------------------------------------------
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "AI News Digest <news@resend.dev>")
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+FREE_MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-coder:free",
+    "openai/gpt-oss-120b:free",
+    "arcee-ai/trinity-large-preview:free",
+]
 
 RSS_FEEDS = [
     "https://techcrunch.com/category/artificial-intelligence/feed/",
@@ -129,57 +138,77 @@ Output a bilingual digest in **valid JSON** (no markdown fences) with this schem
 
 
 def curate_news(stories: list[dict]) -> dict:
-    """Use Gemini to pick top stories and produce bilingual summaries."""
+    """Use OpenRouter free models to pick top stories and produce bilingual summaries."""
     story_text = "\n".join(
         f"- [{s.get('source','')}] {s['title']} | {s.get('url','')} | {s.get('summary','')}"
         for s in stories
     )
 
-    user_msg = f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.\n\nRaw stories:\n{story_text}"
+    user_msg = (
+        f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.\n\n"
+        f"Raw stories:\n{story_text}\n\n"
+        "IMPORTANT: Reply with ONLY valid JSON, no markdown fences, no thinking, no extra text."
+    )
 
-    models = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+    }
+
     last_err = None
-
-    for model in models:
-        for attempt in range(3):
+    for model in FREE_MODELS:
+        for attempt in range(2):
             try:
+                print(f"[INFO] Trying {model} (attempt {attempt+1})...")
                 response = requests.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}",
-                    headers={"Content-Type": "application/json"},
+                    OPENROUTER_URL,
+                    headers=headers,
                     json={
-                        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-                        "contents": [{"parts": [{"text": user_msg}]}],
-                        "generationConfig": {
-                            "temperature": 0.3,
-                            "maxOutputTokens": 3000,
-                            "responseMimeType": "application/json",
-                        },
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "max_tokens": 4000,
+                        "temperature": 0.3,
                     },
-                    timeout=60,
+                    timeout=120,
                 )
                 response.raise_for_status()
-                break
+                data = response.json()
+
+                content = data["choices"][0]["message"].get("content", "")
+                if not content:
+                    print(f"[WARN] {model}: empty content, skipping")
+                    continue
+
+                # Extract JSON from response (handle markdown fences, thinking tags, etc.)
+                raw = content.strip()
+                # Remove markdown code fences
+                fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", raw, re.DOTALL)
+                if fence_match:
+                    raw = fence_match.group(1).strip()
+                # Try to find JSON object directly
+                json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if json_match:
+                    raw = json_match.group(0)
+
+                return json.loads(raw)
+
             except requests.exceptions.HTTPError as e:
                 last_err = e
                 print(f"[WARN] {model} attempt {attempt+1} failed: {e}")
                 if response.status_code == 429:
-                    time.sleep(10 * (attempt + 1))
+                    time.sleep(15)
                 else:
                     break
-        else:
-            print(f"[WARN] All retries failed for {model}, trying next model...")
-            continue
-        break
-    else:
-        raise RuntimeError(f"All Gemini models failed. Last error: {last_err}")
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                last_err = e
+                print(f"[WARN] {model} parse error: {e}")
+                break
+        print(f"[WARN] {model} failed, trying next model...")
 
-    raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    # Handle potential markdown code fences
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-    return json.loads(raw)
+    raise RuntimeError(f"All models failed. Last error: {last_err}")
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +268,7 @@ def render_email(digest: dict) -> str:
         <!-- Footer -->
         <tr>
           <td style="background:#fafafa;padding:16px 24px;text-align:center;font-size:12px;color:#999;">
-            Curated by Gemini · Powered by Google AI<br>
+            Curated by AI · Powered by OpenRouter<br>
             Built with ❤️ for engineers who stay informed
           </td>
         </tr>
@@ -279,7 +308,7 @@ def main():
         print("[ERROR] No stories fetched, aborting.")
         sys.exit(1)
 
-    print("[INFO] Curating with Gemini...")
+    print("[INFO] Curating with AI...")
     digest = curate_news(stories)
     print(f"[INFO] Selected {len(digest['stories'])} stories")
 
