@@ -1,6 +1,6 @@
 """
 Daily AI & Tech News Digest — Bilingual (中文 + English)
-Fetches top stories from multiple sources, uses Claude to curate and summarize,
+Fetches top stories from multiple sources, uses Gemini to curate and summarize,
 then sends a bilingual email digest via Resend.
 """
 
@@ -11,14 +11,13 @@ from datetime import datetime, timezone
 
 import feedparser
 import requests
-from anthropic import Anthropic
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "AI News Digest <news@resend.dev>")
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 
 RSS_FEEDS = [
@@ -129,27 +128,31 @@ Output a bilingual digest in **valid JSON** (no markdown fences) with this schem
 
 
 def curate_news(stories: list[dict]) -> dict:
-    """Use Claude to pick top stories and produce bilingual summaries."""
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
-
+    """Use Gemini to pick top stories and produce bilingual summaries."""
     story_text = "\n".join(
         f"- [{s.get('source','')}] {s['title']} | {s.get('url','')} | {s.get('summary','')}"
         for s in stories
     )
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=3000,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.\n\nRaw stories:\n{story_text}",
-            }
-        ],
-    )
+    user_msg = f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.\n\nRaw stories:\n{story_text}"
 
-    raw = response.content[0].text.strip()
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+        headers={"Content-Type": "application/json"},
+        json={
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"parts": [{"text": user_msg}]}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 3000,
+                "responseMimeType": "application/json",
+            },
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     # Handle potential markdown code fences
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
@@ -215,7 +218,7 @@ def render_email(digest: dict) -> str:
         <!-- Footer -->
         <tr>
           <td style="background:#fafafa;padding:16px 24px;text-align:center;font-size:12px;color:#999;">
-            Curated by Claude · Powered by Anthropic<br>
+            Curated by Gemini · Powered by Google AI<br>
             Built with ❤️ for engineers who stay informed
           </td>
         </tr>
@@ -255,7 +258,7 @@ def main():
         print("[ERROR] No stories fetched, aborting.")
         sys.exit(1)
 
-    print("[INFO] Curating with Claude...")
+    print("[INFO] Curating with Gemini...")
     digest = curate_news(stories)
     print(f"[INFO] Selected {len(digest['stories'])} stories")
 
